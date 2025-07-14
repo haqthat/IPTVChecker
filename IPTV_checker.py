@@ -7,6 +7,7 @@ import time
 import subprocess
 import logging
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def print_header():
     header_text = """
@@ -258,7 +259,49 @@ def console_log_entry(current_channel, total_channels, channel_name, status, vid
             print(f"{color}{current_channel}/{total_channels} {status_symbol} {channel_name}\033[0m")
             logging.info(f"{current_channel}/{total_channels} {status_symbol} {channel_name}")
 
-def parse_m3u8_file(file_path, group_title, timeout, log_file, extended_timeout, split=False, rename=False):
+def process_single_channel(channel_info, total_channels, timeout, extended_timeout, output_folder, rename=False):
+    """Process a single channel and return the results"""
+    line, next_line, channel_name, current_channel = channel_info
+    
+    status = check_channel_status(next_line, timeout, extended_timeout=extended_timeout)
+    video_info = "Unknown"
+    audio_info = "Unknown"
+    resolution = "Unknown"
+    fps = None
+    mismatches = []
+    
+    if status == 'Alive':
+        video_info, resolution, fps = get_stream_info(next_line)
+        audio_info = get_audio_bitrate(next_line)
+        mismatches = check_label_mismatch(channel_name, resolution)
+        
+        # Capture frame
+        file_name = f"{current_channel}-{channel_name.replace('/', '-')}"
+        capture_frame(next_line, output_folder, file_name)
+        
+        # Handle renaming if needed
+        if rename:
+            renamed_channel_name = f"{channel_name} ({resolution} {video_info.split()[-1]} | {audio_info})"
+            extinf_parts = line.split(',', 1)
+            if len(extinf_parts) > 1:
+                extinf_parts[1] = renamed_channel_name
+                line = ','.join(extinf_parts)
+    
+    # Return all the information needed
+    return {
+        'current_channel': current_channel,
+        'channel_name': channel_name,
+        'status': status,
+        'video_info': video_info,
+        'audio_info': audio_info,
+        'fps': fps,
+        'line': line,
+        'next_line': next_line,
+        'resolution': resolution,
+        'mismatches': mismatches
+    }
+
+def parse_m3u8_file(file_path, group_title, timeout, log_file, extended_timeout, split=False, rename=False, max_workers=10):
     base_playlist_name = os.path.basename(file_path).split('.')[0]
     group_name = group_title.replace('|', '').replace(' ', '') if group_title else 'AllGroups'
     output_folder = f"{base_playlist_name}_{group_name}_screenshots"
@@ -298,59 +341,97 @@ def parse_m3u8_file(file_path, group_title, timeout, log_file, extended_timeout,
             if max_line_length > console_width:
                 use_padding = False
 
-            renamed_lines = []
+            # Collect all channels that need processing
+            channels_to_process = []
+            all_lines = []
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
+                all_lines.append(line)
+                
                 if line.startswith('#EXTINF') and (group_title in line if group_title else True):
                     if i + 1 < len(lines):
                         next_line = lines[i + 1].strip()
+                        all_lines.append(next_line)
                         channel_name = line.split(',', 1)[1].strip() if ',' in line else "Unknown Channel"
                         identifier = f"{channel_name} {next_line}"
+                        
                         if identifier not in processed_channels:
                             current_channel += 1
-                            status = check_channel_status(next_line, timeout, extended_timeout=extended_timeout)
-                            video_info = "Unknown"
-                            audio_info = "Unknown"
-                            fps = None
-                            if status == 'Alive':
-                                video_info, resolution, fps = get_stream_info(next_line)
-                                audio_info = get_audio_bitrate(next_line)
-                                mismatches = check_label_mismatch(channel_name, resolution)
-                                if fps is not None and fps <= 30:
-                                    low_framerate_channels.append(f"{current_channel}/{total_channels} {channel_name} - \033[91m{fps}fps\033[0m")
-                                if mismatches:
-                                    mislabeled_channels.append(f"{current_channel}/{total_channels} {channel_name} - \033[91m{', '.join(mismatches)}\033[0m")
-                                file_name = f"{current_channel}-{channel_name.replace('/', '-')}"  # Replace '/' to avoid path issues
-                                capture_frame(next_line, output_folder, file_name)
-                                
-                                if rename:
-                                    # Create the new channel name in the desired format
-                                    renamed_channel_name = f"{channel_name} ({resolution} {video_info.split()[-1]} | {audio_info})"
-                                    extinf_parts = line.split(',', 1)
-                                    if len(extinf_parts) > 1:
-                                        extinf_parts[1] = renamed_channel_name
-                                        line = ','.join(extinf_parts)
-
-                                if split:
-                                    working_channels.append((line, next_line))
-                            else:
-                                if split:
-                                    dead_channels.append((line, next_line))
-                            console_log_entry(current_channel, total_channels, channel_name, status, video_info, audio_info, max_name_length, use_padding)
-                            processed_channels.add(identifier)
-
-                        # Add the processed (renamed) line and the corresponding URL to the list
-                        renamed_lines.append(line)
-                        renamed_lines.append(next_line)
+                            channels_to_process.append((line, next_line, channel_name, current_channel))
+                        
                         i += 1  # Skip the next line because it's already processed
                     else:
-                        # If there's no URL following the EXTINF line, just add it
-                        renamed_lines.append(line)
-                else:
-                    # If it's not an EXTINF line, just keep it as is
-                    renamed_lines.append(line)
+                        # If there's no URL following the EXTINF line, just continue
+                        pass
                 i += 1
+            
+            # Process channels in parallel
+            print(f"\033[93mProcessing {len(channels_to_process)} channels with {max_workers} parallel workers...\033[0m")
+            results = []
+            renamed_lines = all_lines.copy()  # Start with all lines and update as needed
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_channel = {
+                    executor.submit(
+                        process_single_channel, 
+                        channel_info, 
+                        total_channels, 
+                        timeout, 
+                        extended_timeout, 
+                        output_folder, 
+                        rename
+                    ): channel_info 
+                    for channel_info in channels_to_process
+                }
+                
+                for future in as_completed(future_to_channel):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        
+                        # Log the result
+                        console_log_entry(
+                            result['current_channel'], 
+                            total_channels, 
+                            result['channel_name'], 
+                            result['status'], 
+                            result['video_info'], 
+                            result['audio_info'], 
+                            max_name_length, 
+                            use_padding
+                        )
+                        
+                        # Process any mismatches or low framerate
+                        if result['status'] == 'Alive':
+                            if result['fps'] is not None and result['fps'] <= 30:
+                                low_framerate_channels.append(f"{result['current_channel']}/{total_channels} {result['channel_name']} - \033[91m{result['fps']}fps\033[0m")
+                            
+                            if result['mismatches']:
+                                mislabeled_channels.append(f"{result['current_channel']}/{total_channels} {result['channel_name']} - \033[91m{', '.join(result['mismatches'])}\033[0m")
+                        
+                        # Add to working or dead channels
+                        if split:
+                            if result['status'] == 'Alive':
+                                working_channels.append((result['line'], result['next_line']))
+                            else:
+                                dead_channels.append((result['line'], result['next_line']))
+                        
+                        # Update renamed_lines if needed
+                        if rename and result['status'] == 'Alive':
+                            # Find and replace the original EXTINF line
+                            original_line = None
+                            for j, line in enumerate(renamed_lines):
+                                if line.startswith('#EXTINF') and result['channel_name'] in line:
+                                    original_line = line
+                                    renamed_lines[j] = result['line']
+                                    break
+                        
+                        # Mark as processed
+                        processed_channels.add(f"{result['channel_name']} {result['next_line']}")
+                        
+                    except Exception as e:
+                        logging.error(f"Error processing channel: {str(e)}")
 
             if split:
                 working_playlist_path = f"{base_playlist_name}_working.m3u8"
@@ -400,28 +481,30 @@ def main():
     print_header()
 
     parser = argparse.ArgumentParser(description="Check the status of channels in an IPTV M3U8 playlist and capture frames of live channels.")
-    parser.add_argument("playlist", type=str, help="Path to the M3U8 playlist file")
-    parser.add_argument("-group", "-g", type=str, default=None, help="Specific group title to check within the playlist")
-    parser.add_argument("-timeout", "-t", type=float, default=10.0, help="Timeout in seconds for checking channel status")
-    parser.add_argument("-v", action="count", default=0, help="Increase output verbosity (-v for info, -vv for debug)")
-    parser.add_argument("-extended", "-e", type=int, nargs='?', const=10, default=None, help="Enable extended timeout check for dead channels. Default is 10 seconds if used without specifying time.")
-    parser.add_argument("-split", "-s", action="store_true", help="Create separate playlists for working and dead channels")
-    parser.add_argument("-rename", "-r", action="store_true", help="Rename alive channels to include video and audio info")
+    parser.add_argument("file", type=str, help="Path to the M3U8 playlist file")
+    parser.add_argument("-g", "--group", type=str, default=None, help="Specific group title to check within the playlist")
+    parser.add_argument("-t", "--timeout", type=float, default=10.0, help="Timeout in seconds for checking channel status")
+    parser.add_argument("-e", "--extended", dest="extended_timeout", type=int, nargs='?', const=10, default=None, 
+                      help="Enable extended timeout check for dead channels. Default is 10 seconds if used without specifying time.")
+    parser.add_argument("-s", "--split", action="store_true", help="Create separate playlists for working and dead channels")
+    parser.add_argument("-r", "--rename", action="store_true", help="Rename alive channels to include video and audio info")
+    parser.add_argument("-w", "--workers", type=int, default=10, help="Number of parallel workers")
+    parser.add_argument("-v", "--verbose", action="count", default=0, help="Increase output verbosity (-v for info, -vv for debug)")
+    
+    print("\033[93mIPTV Checker with parallel processing capability\033[0m")
 
     args = parser.parse_args()
 
-    # Set up logging based on verbosity level
-    if args.v == 1:
-        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    elif args.v >= 2:
-        logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-    else:
-        logging.basicConfig(level=logging.CRITICAL)  # Only critical errors will be logged by default.
+    setup_logging(args.verbose)
 
     group_name = args.group.replace('|', '').replace(' ', '') if args.group else 'AllGroups'
-    log_file_name = f"{os.path.basename(args.playlist).split('.')[0]}_{group_name}_checklog.txt"
+    log_file_name = f"{os.path.basename(args.file).split('.')[0]}_{group_name}_checklog.txt"
 
-    parse_m3u8_file(args.playlist, args.group, args.timeout, log_file_name, extended_timeout=args.extended, split=args.split, rename=args.rename)
+    try:
+        parse_m3u8_file(args.file, args.group, args.timeout, log_file_name, args.extended_timeout, args.split, args.rename, args.workers)
+    except KeyboardInterrupt:
+        logging.info("Interrupted by user. Exiting...")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

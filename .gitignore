@@ -1,2 +1,39 @@
+# IPTV Playlist files
 *.m3u
+*.m3u8
+
+# Generated playlists
+*_working.m3u8
+*_dead.m3u8
+*_renamed.m3u8
+
+# Screenshots directory
+*_screenshots/
+
+# Logs
+*.log
+
+# macOS system files
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg

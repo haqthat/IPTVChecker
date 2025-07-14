@@ -11,6 +11,7 @@ IPTV Stream Checker is a command-line tool designed to check the status of chann
 ## Features
 
 - **Check Stream Status:** Verify if IPTV streams are alive or dead.
+- **Parallel Processing:** Process multiple streams simultaneously for faster checking.
 - **Split Playlist:** Split into separate playlists for working and dead channels.
 - **Capture Screenshots:** Capture screenshots from live streams.
 - **Group Filter:** Option to check specific groups within the M3U8 playlist.
@@ -49,11 +50,12 @@ python IPTV_checker.py /path/to/your/playlist.m3u8
 
 ### Options
 
-- **`-group` or `-g`**: Specify a group title to check within the playlist.
-- **`-timeout` or `-t`**: Set a timeout in seconds for checking the channel status.
-- **`-extended` or `-e [seconds]`**: Enable an extended timeout check for channels detected as dead. If specified without a value, defaults to 10 seconds. This option allows you to retry dead channels with a longer timeout.
-- **`-split` or `-s`**: Create separate playlists for working and dead channels.
-- **`-rename` or `-r`**: Rename alive channels to include video and audio information in the playlist.
+- **`-g, --group`**: Specify a group title to check within the playlist.
+- **`-t, --timeout`**: Set a timeout in seconds for checking the channel status.
+- **`-e, --extended [seconds]`**: Enable an extended timeout check for channels detected as dead. If specified without a value, defaults to 10 seconds. This option allows you to retry dead channels with a longer timeout.
+- **`-s, --split`**: Create separate playlists for working and dead channels.
+- **`-r, --rename`**: Rename alive channels to include video and audio information in the playlist.
+- **`-w, --workers`**: Set the number of parallel workers for processing streams (default: 10).
 - **`-v`**: Increase output verbosity to `INFO` level.
 - **`-vv`**: Increase output verbosity to `DEBUG` level.
 
@@ -66,30 +68,45 @@ python IPTV_checker.py /path/to/your/playlist.m3u8
 
 2. **Check a Specific Group**:
    ```bash
-   python IPTV_checker.py /path/to/your/playlist.m3u8 -group "SPORT HD"
+   python IPTV_checker.py /path/to/your/playlist.m3u8 --group "SPORT HD"
+   # or
+   python IPTV_checker.py /path/to/your/playlist.m3u8 -g "SPORT HD"
    ```
 
 3. **Check with Extended Timeout**:
    ```bash
-   python IPTV_checker.py /path/to/your/playlist.m3u8 -extended 30
+   python IPTV_checker.py /path/to/your/playlist.m3u8 --extended 30
+   # or
+   python IPTV_checker.py /path/to/your/playlist.m3u8 -e 30
    ```
 
 4. **Split Playlist into Working and Dead Channels**:
    ```bash
-   python IPTV_checker.py /path/to/your/playlist.m3u8 -split
+   python IPTV_checker.py /path/to/your/playlist.m3u8 --split
+   # or
+   python IPTV_checker.py /path/to/your/playlist.m3u8 -s
    ```
 
 5. **Rename Working Channels with Video and Audio Info**:
    ```bash
-   python IPTV_checker.py /path/to/your/playlist.m3u8 -rename
+   python IPTV_checker.py /path/to/your/playlist.m3u8 --rename
+   # or
+   python IPTV_checker.py /path/to/your/playlist.m3u8 -r
    ```
 
-6. **Split Playlist and Rename Working Channels**:
+6. **Process with 20 Parallel Workers**:
    ```bash
-   python IPTV_checker.py /path/to/your/playlist.m3u8 -split -rename
+   python IPTV_checker.py /path/to/your/playlist.m3u8 --workers 20
+   # or
+   python IPTV_checker.py /path/to/your/playlist.m3u8 -w 20
    ```
 
-7. **Enable Debug Mode for Detailed Output**:
+7. **Combine Multiple Options**:
+   ```bash
+   python IPTV_checker.py /path/to/your/playlist.m3u8 -s -r -w 20 -v
+   ```
+
+8. **Enable Debug Mode for Detailed Output**:
    ```bash
    python IPTV_checker.py /path/to/your/playlist.m3u8 -vv
    ```
